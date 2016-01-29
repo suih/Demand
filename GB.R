@@ -74,6 +74,14 @@ ratio<-ddply(test,c('title_term','scores_date'),function(x){head(x[,6:length(x)]
 names(ratio)<-c('title_term','scores_date','weight')
 test<-merge(x=test,y=ratio,by=c('title_term','scores_date'))
 ddply(test,c('title_term','baseline','calibre','tune'),function(x){geometric.mean(x$weight)})->calibre
+summary<-ddply(test,'tune',function(x){summary(x$weight)})
+var<-ddply(subset(test,!is.na(weight)),'tune',function(x){var(x$weight)})
+names(var)<-c('tune','var')
+summary<-merge(x=summary,y=var,by='tune',all=TRUE)
+summary$var[is.na(summary$var)]<-0
+summary$dispersion<-summary$Mean/summary$var
+save(summary,file='GB_titleterm_check.Rda')
+
 
 # 2nd phase : Calibrate the maximum based on seed_term_score
 
@@ -101,6 +109,13 @@ names(ratio)<-c('title_term','scores_date','weight')
 test<-merge(x=test,y=ratio,by=c('title_term','scores_date'))
 subset<-subset(test,weight>0)
 ddply(subset,c('title_term','baseline','calibre','tune'),function(x){geometric.mean(x$weight)})->calibre2
+summary<-ddply(test,'tune',function(x){summary(x$weight)})
+var<-ddply(subset(test,!is.na(weight)),'tune',function(x){var(x$weight)})
+names(var)<-c('tune','var')
+summary<-merge(x=summary,y=var,by='tune',all=TRUE)
+summary$var[is.na(summary$var)]<-0
+summary$dispersion<-summary$Mean/summary$var
+save(summary,file='GB_seedterm_check.Rda')
 
 names(calibre)<-c('title_term','baseline','calibre','tune','title_weight')
 names(calibre2)<-c('title_term','baseline','calibre','tune','seed_weight')
@@ -138,11 +153,11 @@ print(nrow(check2))
 # there is no record that needs extra imputation 
 # unsalv<-subset(check2,is.na(V1))
 # nrow(unsalv)
-batch<-unique(calibrate[c("title_term","scores_date","batch_num")])
+# batch<-unique(calibrate[c("title_term","scores_date","batch_num")])
 # unsalv<-ddply(unsalv,c('title_id','title_term','scores_date'),function(x){mean(x$title_term_score)})
 # unsalv2<-merge(x=unsalv,y=batch,by=c('title_term','scores_date'))
 # 
-cal2<-merge(x=cal2,y=batch,by=c('title_term','scores_date'))
+# cal2<-merge(x=cal2,y=batch,by=c('title_term','scores_date'))
 # 
 # salv<-merge(x=unsalv2,y=weight,by=c('title_term','batch_num'))
 # seed<-unique(salv[c("title_term",'baseline')])
@@ -159,13 +174,14 @@ cal2<-merge(x=cal2,y=batch,by=c('title_term','scores_date'))
 # unsalv$aspirin_score<-ifelse(is.na(unsalv$aspirin_score),unsalv$title_term_score,unsalv$aspirin_score)
 # unsalv<-ddply(unsalv,c('title_id.x','title_term','scores_date'),function(x){max(x$aspirin_score)})
 # cal3<-ddply(cal3,c('title_id','scores_date'),function(x){sum(x$aspirin_score)})
-names(cal2)<-c('title_term','scores_date','title_id','aspirin_score','batch_num')
+names(cal2)<-c('title_id','scores_term','scores_date','aspirin_score')
 cal3<-ddply(cal2,c('scores_date','title_id'),function(x){sum(x$aspirin_score)})
 names(cal3)<-c('scores_date','title_id','aspirin_score')
+cal3<-cal3[with(cal3,order(title_id,scores_date)),]
 save(cal3,file='GB_aspirin.Rda')
 
 # GETTING DAILY 24W DATA FOR MX
-load('GB_aspirin.Rda')
+# load('GB_aspirin.Rda')
 title=data.frame(RPrint_CSV('shuang',"SELECT signup_date,show_title_id,Count(DISTINCT account_id) AS w24,Avg(viewtime) AS avg_view
                             FROM
                             (
@@ -293,7 +309,7 @@ full <- full %>%
   mutate(lag1_wiki = lag(wiki_requests,1)) %>%
   mutate(lag7_wiki = lag(wiki_requests,7)) %>%
   mutate(lag14_wiki = lag(wiki_requests,14)) %>%
-  mutate(lag30_wiki = lag(wiki_requests,14)) %>% 
+  mutate(lag30_wiki = lag(wiki_requests,30)) %>% 
   mutate(mv_aspirin = lag(rollmeanr(aspirin_impute,14,fill = NA),1)) %>%
   mutate(mv_wiki = lag(rollmeanr(wiki_requests,14,fill = NA),1)) %>% 
   mutate(mv2m_aspirin = lag(rollmeanr(aspirin_impute,30,fill = NA),30)) %>%
@@ -304,9 +320,16 @@ full <- full %>%
 
 require(qedlm)
 concurrent<-with(full,qe_impact(w24rate,time=scores_date,series_group=title_name,seasonality=7,predictors=data.frame(wiki_requests,aspirin_impute)))
+
+full$month<-as.character(full$month)
+test<-model.matrix(~ month-1,data=full)
+full2<-cbind(full,test)
+concurrent2<-with(full2,qe_impact(w24rate,time=scores_date,series_group=title_name,seasonality=7,predictors=data.frame(wiki_requests,aspirin_impute,monthFeb,monthMar,monthApr,monthMay,monthJul,monthJun,monthAug,monthSep,monthOct,monthNov,monthDec)))
+
 sub<-subset(full,!is.na(mv_aspirin))
 qedlm_withmv<-with(sub,qe_impact(w24rate,time=scores_date,series_group=title_name,seasonality=7,predictors=data.frame(wiki_requests,aspirin_impute,mv_aspirin,mv_wiki)))
-qedlm_lag<-with(sub,qe_impact(w24rate,time=scores_date,series_group=title_name,seasonality=7,predictors=data.frame(wiki_requests,aspirin_impute,mv_aspirin,mv_wiki)))
+sub<-subset(full,!is.na(lag14_wiki))
+qedlm_lag<-with(sub,qe_impact(w24rate,time=scores_date,series_group=title_name,seasonality=7,predictors=data.frame(lag7_wiki,lag7_aspirin,lag14_wiki,lag14_aspirin,mv_aspirin,mv_wiki)))
 
 require(plm)
 fixed<- plm(w24rate~ lag1_aspirin + lag1_wiki + factor(weekday) + factor(month), data=full, index=c("title_name"), model="pooling")
